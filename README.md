@@ -1,3 +1,5 @@
+# If you want to send a request to update just make a PR. I will not update this otherwise.
+
 <p align="center">
   <img src="res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#raw-steps-to-build">Build</a> •
