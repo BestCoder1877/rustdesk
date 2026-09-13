@@ -13,9 +13,9 @@
 
   outputs = { self, nixpkgs, nixpkgs-darwin-legacy, flake-utils, hbb_common, ... }:
     {
-      overlays.default = final: prev: {
-        rustdesk = (self.packages.${final.system} or self.packages.${final.stdenv.system}).default or null;
-      };
+overlays.default = final: prev: {
+      rustdesk = (self.packages.${final.system} or self.packages.${final.stdenv.system}).default or null;
+    };
     } // flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs =
@@ -92,7 +92,7 @@
           ''
         );
 
-        rustdesk = pkgs.rustPlatform.buildRustPackage {
+rustdesk = pkgs.rustPlatform.buildRustPackage {
           pname = "rustdesk";
           version = "1.5.0";
           src = ./.;
@@ -105,14 +105,14 @@
               name = "rustdesk";
               desktopName = "RustDesk";
               genericName = "Remote Desktop";
-              comment = "Remote Desktop";
+              comment = "Remote Desktop (unattended Wayland/DRM)";
               exec = "rustdesk %u";
               icon = "rustdesk";
               terminal = false;
               type = "Application";
               startupNotify = true;
               categories = [ "Network" "RemoteAccess" "GTK" ];
-              keywords = [ "internet" "linux" "dart" "rust" "remote-control" "p2p" "teamviewer" "rust-lang" "rdp" "remote-desktop" "vnc" ];
+              keywords = [ "internet" "linux" "dart" "rust" "remote-control" "p2p" "teamviewer" "rust-lang" "rdp" "remote-desktop" "vnc" "drm" "wayland" "unattended" ];
               startupWMClass = "rustdesk";
               actions.new-window = {
                 name = "Open a New Window";
@@ -144,7 +144,7 @@
             pkgs.wrapGAppsHook3
           ];
 
-          buildFeatures = lib.optionals pkgs.stdenv.isLinux [ "linux-pkg-config" ];
+          buildFeatures = lib.optionals pkgs.stdenv.isLinux [ "linux-pkg-config" "drm" "drm-wake" ];
 
           doCheck = false;
 
@@ -177,6 +177,20 @@
             pkgs.xdotool
             pkgs.libsciter
             pkgs.libayatana-appindicator
+            pkgs.libdrm
+            pkgs.libglvnd
+            pkgs.mesa
+            pkgs.mesa-drivers
+            pkgs.libegl
+            pkgs.libgles2
+            pkgs.libwayland-client
+            pkgs.wayland
+            pkgs.libxcomposite
+            pkgs.libxdamage
+            pkgs.libxfixes
+            pkgs.libxrandr
+            pkgs.libxtst
+            pkgs.libxkbfile
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             pkgs.libiconv
             pkgs.apple-sdk
@@ -201,7 +215,7 @@
 
           postInstall = ''
             mkdir -p $out/lib/rustdesk $out/share
-            mv $out/bin/rustdesk $out/lib/rustdesk
+            mv $out/bin/rustdesk $out/lib/rustdesk/rustdesk
             makeWrapper $out/lib/rustdesk/rustdesk $out/bin/rustdesk \
               --chdir "$out/share"
           '' + lib.optionalString pkgs.stdenv.isLinux ''
@@ -209,6 +223,9 @@
             ln -s ${pkgs.libsciter}/lib/libsciter-gtk.so $out/lib/rustdesk
             cp -a $src/src/ui $out/share/src
             install -Dm0644 $src/res/logo.svg $out/share/icons/hicolor/scalable/apps/rustdesk.svg
+            # Bundle libdrmtap.so.0 for the DRM backend
+            # This needs to be built separately and bundled
+            # For now, we'll note that this needs to be handled by the build process
           '' + lib.optionalString pkgs.stdenv.isDarwin ''
             mkdir -p $out/share/src
             ln -s ${libsciter-darwin}/lib/libsciter.dylib $out/lib/rustdesk/libsciter.dylib
@@ -234,12 +251,341 @@
             mainProgram = "rustdesk";
           };
         };
+
+          patches = [ ./nix/make-build-reproducible.patch ];
+
+          desktopItems = lib.optionals pkgs.stdenv.isLinux [
+            (pkgs.makeDesktopItem {
+              name = "rustdesk";
+              desktopName = "RustDesk";
+              genericName = "Remote Desktop";
+              comment = "Remote Desktop (unattended Wayland/DRM)";
+              exec = "rustdesk %u";
+              icon = "rustdesk";
+              terminal = false;
+              type = "Application";
+              startupNotify = true;
+              categories = [ "Network" "RemoteAccess" "GTK" ];
+              keywords = [ "internet" "linux" "dart" "rust" "remote-control" "p2p" "teamviewer" "rust-lang" "rdp" "remote-desktop" "vnc" "drm" "wayland" "unattended" ];
+              startupWMClass = "rustdesk";
+              actions.new-window = {
+                name = "Open a New Window";
+                exec = "rustdesk %u";
+};
+
+          # Replace the hbb_common submodule with the flake input pin.
+          # CI verifies the flake.lock pin matches the submodule gitlink
+          # on every run — see the "Verify hbb_common submodule pin" step
+          # in .github/workflows/nix.yml.
+          prePatch = ''
+            rm -rf libs/hbb_common
+            cp -r ${hbb_common} libs/hbb_common
+            chmod -R u+w libs/hbb_common
+          '';
+
+          postPatch = ''
+            sed -e '1i #include <cstdint>' -i $cargoDepsCopy/*/webm-1.1.0/src/sys/libwebm/mkvparser/mkvparser.cc
+            sed -e '1i #include <cstdint>' -i $cargoDepsCopy/*/webm-sys-1.0.4/libwebm/mkvparser/mkvparser.cc
+          '';
+
+          postInstall = ''
+            mkdir -p $out/lib/rustdesk $out/share
+            mv $out/bin/rustdesk $out/lib/rustdesk/rustdesk
+            makeWrapper $out/lib/rustdesk/rustdesk $out/bin/rustdesk \
+              --chdir "$out/share"
+          '' + lib.optionalString pkgs.stdenv.isLinux ''
+            mkdir -p $out/share/src
+            ln -s ${pkgs.libsciter}/lib/libsciter-gtk.so $out/lib/rustdesk
+            cp -a $src/src/ui $out/share/src
+            install -Dm0644 $src/res/logo.svg $out/share/icons/hicolor/scalable/apps/rustdesk.svg
+            # Bundle libdrmtap.so.0 for the DRM backend
+            # This needs to be built separately and bundled
+            # For now, we'll note that this needs to be handled by the build process
+          '' + lib.optionalString pkgs.stdenv.isDarwin ''
+            mkdir -p $out/share/src
+            ln -s ${libsciter-darwin}/lib/libsciter.dylib $out/lib/rustdesk/libsciter.dylib
+            cp -a $src/src/ui $out/share/src
+          '';
+
+          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
+            patchelf --add-rpath "${pkgs.libayatana-appindicator}/lib" "$out/lib/rustdesk/rustdesk"
+          '';
+
+          env = {
+            SODIUM_USE_PKG_CONFIG = true;
+            ZSTD_SYS_USE_PKG_CONFIG = true;
+          } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            VCPKG_ROOT = "${vcpkgRoot}";
+            VCPKG_INSTALLED_ROOT = "${vcpkgRoot}/installed";
+          };
+
+          meta = {
+            description = "Virtual / remote desktop infrastructure for everyone! Open source TeamViewer / Citrix alternative";
+            homepage = "https://github.com/rustdesk/rustdesk";
+            license = lib.licenses.agpl3Only;
+            mainProgram = "rustdesk";
+          };
+        };
+
+
+      };
+    };
+  in
+  {
+    overlays.default = final: prev: {
+      rustdesk = (self.packages.${final.system} or self.packages.${final.stdenv.system}).default or null;
+    };
+  in
+  {
+    packages = {
+      rustdesk = rustdesk;
+      default = rustdesk;
+      source = rustdesk;
+    } // lib.optionalAttrs pkgs.stdenv.isLinux {
+      nixpkgs = pkgs.rustdesk;
+    };
+
+    apps = {
+      rustdesk = {
+        type = "app";
+        program = "${rustdesk}/bin/rustdesk";
+      };
+      default = {
+        type = "app";
+        program = "${rustdesk}/bin/rustdesk";
+      };
+    } // lib.optionalAttrs pkgs.stdenv.isLinux {
+      nixpkgs = {
+        type = "app";
+        program = "${pkgs.rustdesk}/bin/rustdesk";
+      };
+    };
+
+    checks = {
+      build = rustdesk;
+    };
+
+    devShells.default = pkgs.mkShell {
+      nativeBuildInputs = [
+        pkgs.pkg-config
+        pkgs.perl
+        pkgs.makeWrapper
+        pkgs.rustPlatform.bindgenHook
+      ] ++ lib.optionals pkgs.stdenv.isLinux [
+        pkgs.copyDesktopItems
+        pkgs.wrapGAppsHook3
+      ];
+
+      buildInputs = [
+        pkgs.rustc
+        pkgs.cargo
+        pkgs.bzip2
+        pkgs.libgit2
+        pkgs.libsodium
+        pkgs.libvpx
+        pkgs.libyuv
+        pkgs.libopus
+        pkgs.libaom
+        pkgs.openssl
+        pkgs.zlib
+        pkgs.zstd
+      ] ++ lib.optionals pkgs.stdenv.isLinux [
+        pkgs.atk
+        pkgs.cairo
+        pkgs.dbus
+        pkgs.gdk-pixbuf
+        pkgs.glib
+        pkgs.gst_all_1.gst-plugins-base
+        pkgs.gst_all_1.gstreamer
+        pkgs.gtk3
+        pkgs.libpulseaudio
+        pkgs.libxtst
+        pkgs.libxkbcommon
+        pkgs.pam
+        pkgs.pango
+        pkgs.alsa-lib
+        pkgs.xdotool
+        pkgs.libsciter
+        pkgs.libayatana-appindicator
+        pkgs.libdrm
+        pkgs.libglvnd
+        pkgs.mesa
+        pkgs.mesa-drivers
+        pkgs.libegl
+        pkgs.libgles2
+        pkgs.libwayland-client
+        pkgs.wayland
+        pkgs.libxcomposite
+        pkgs.libxdamage
+        pkgs.libxfixes
+        pkgs.libxrandr
+        pkgs.libxtst
+        pkgs.libxkbfile
+      ] ++ lib.optionals pkgs.stdenv.isDarwin [
+        pkgs.libiconv
+        pkgs.apple-sdk
+        vcpkgRoot
+        libsciter-darwin
+      ];
+
+      RUSTDESK_BUILD_FEATURES = lib.optionalString pkgs.stdenv.isLinux "linux-pkg-config drm drm-wake";
+
+      shellHook = ''
+        # Set up hbb_common so cargo build works from the source tree.
+        if [ ! -e libs/hbb_common/Cargo.toml ]; then
+          rm -rf libs/hbb_common
+          cp -r ${hbb_common} libs/hbb_common
+          chmod -R u+w libs/hbb_common
+        fi
+      '' + lib.optionalString pkgs.stdenv.isDarwin ''
+        export VCPKG_ROOT="${vcpkgRoot}"
+        export VCPKG_INSTALLED_ROOT="${vcpkgRoot}/installed"
+      '';
+    };
+  }
+}
+            })
+            (pkgs.makeDesktopItem {
+              name = "rustdesk-link";
+              desktopName = "RustDesk";
+              noDisplay = true;
+              mimeTypes = [ "x-scheme-handler/rustdesk" ];
+              tryExec = "rustdesk";
+              exec = "rustdesk %u";
+              icon = "rustdesk";
+              terminal = false;
+              type = "Application";
+              startupNotify = false;
+              startupWMClass = "rustdesk";
+            })
+          ];
+
+          nativeBuildInputs = [
+            pkgs.pkg-config
+            pkgs.perl
+            pkgs.makeWrapper
+            pkgs.rustPlatform.bindgenHook
+          ] ++ lib.optionals pkgs.stdenv.isLinux [
+            pkgs.copyDesktopItems
+            pkgs.wrapGAppsHook3
+          ];
+
+          buildFeatures = lib.optionals pkgs.stdenv.isLinux [ "linux-pkg-config" "drm" "drm-wake" ];
+
+          doCheck = false;
+
+          buildInputs = [
+            pkgs.bzip2
+            pkgs.libgit2
+            pkgs.libsodium
+            pkgs.libvpx
+            pkgs.libyuv
+            pkgs.libopus
+            pkgs.libaom
+            pkgs.openssl
+            pkgs.zlib
+            pkgs.zstd
+          ] ++ lib.optionals pkgs.stdenv.isLinux [
+            pkgs.atk
+            pkgs.cairo
+            pkgs.dbus
+            pkgs.gdk-pixbuf
+            pkgs.glib
+            pkgs.gst_all_1.gst-plugins-base
+            pkgs.gst_all_1.gstreamer
+            pkgs.gtk3
+            pkgs.libpulseaudio
+            pkgs.libxtst
+            pkgs.libxkbcommon
+            pkgs.pam
+            pkgs.pango
+            pkgs.alsa-lib
+            pkgs.xdotool
+            pkgs.libsciter
+            pkgs.libayatana-appindicator
+            pkgs.libdrm
+            pkgs.libglvnd
+            pkgs.mesa
+            pkgs.mesa-drivers
+            pkgs.libegl
+            pkgs.libgles2
+            pkgs.libwayland-client
+            pkgs.wayland
+            pkgs.libxcomposite
+            pkgs.libxdamage
+            pkgs.libxfixes
+            pkgs.libxrandr
+            pkgs.libxtst
+            pkgs.libxkbfile
+          ] ++ lib.optionals pkgs.stdenv.isDarwin [
+            pkgs.libiconv
+            pkgs.apple-sdk
+            vcpkgRoot
+            libsciter-darwin
+          ];
+
+          # Replace the hbb_common submodule with the flake input pin.
+          # CI verifies the flake.lock pin matches the submodule gitlink
+          # on every run — see the "Verify hbb_common submodule pin" step
+          # in .github/workflows/nix.yml.
+          prePatch = ''
+            rm -rf libs/hbb_common
+            cp -r ${hbb_common} libs/hbb_common
+            chmod -R u+w libs/hbb_common
+          '';
+
+          postPatch = ''
+            sed -e '1i #include <cstdint>' -i $cargoDepsCopy/*/webm-1.1.0/src/sys/libwebm/mkvparser/mkvparser.cc
+            sed -e '1i #include <cstdint>' -i $cargoDepsCopy/*/webm-sys-1.0.4/libwebm/mkvparser/mkvparser.cc
+          '';
+
+          postInstall = ''
+            mkdir -p $out/lib/rustdesk $out/share
+            mv $out/bin/rustdesk $out/lib/rustdesk/rustdesk
+            makeWrapper $out/lib/rustdesk/rustdesk $out/bin/rustdesk \
+              --chdir "$out/share"
+          '' + lib.optionalString pkgs.stdenv.isLinux ''
+            mkdir -p $out/share/src
+            ln -s ${pkgs.libsciter}/lib/libsciter-gtk.so $out/lib/rustdesk
+            cp -a $src/src/ui $out/share/src
+            install -Dm0644 $src/res/logo.svg $out/share/icons/hicolor/scalable/apps/rustdesk.svg
+            # Bundle libdrmtap.so.0 for the DRM backend
+            # This needs to be built separately and bundled
+            # For now, we'll note that this needs to be handled by the build process
+          '' + lib.optionalString pkgs.stdenv.isDarwin ''
+            mkdir -p $out/share/src
+            ln -s ${libsciter-darwin}/lib/libsciter.dylib $out/lib/rustdesk/libsciter.dylib
+            cp -a $src/src/ui $out/share/src
+          '';
+
+          postFixup = lib.optionalString pkgs.stdenv.isLinux ''
+            patchelf --add-rpath "${pkgs.libayatana-appindicator}/lib" "$out/lib/rustdesk/rustdesk"
+          '';
+
+          env = {
+            SODIUM_USE_PKG_CONFIG = true;
+            ZSTD_SYS_USE_PKG_CONFIG = true;
+          } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            VCPKG_ROOT = "${vcpkgRoot}";
+            VCPKG_INSTALLED_ROOT = "${vcpkgRoot}/installed";
+          };
+
+          meta = {
+            description = "Virtual / remote desktop infrastructure for everyone! Open source TeamViewer / Citrix alternative";
+            homepage = "https://github.com/rustdesk/rustdesk";
+            license = lib.licenses.agpl3Only;
+            mainProgram = "rustdesk";
+          };
+        };
+
+        
       in
       {
         packages = {
           rustdesk = rustdesk;
           default = rustdesk;
           source = rustdesk;
+          unattended-wayland = rustdesk;
         } // lib.optionalAttrs pkgs.stdenv.isLinux {
           nixpkgs = pkgs.rustdesk;
         };
@@ -250,6 +596,10 @@
             program = "${rustdesk}/bin/rustdesk";
           };
           default = {
+            type = "app";
+            program = "${rustdesk}/bin/rustdesk";
+          };
+          unattended-wayland = {
             type = "app";
             program = "${rustdesk}/bin/rustdesk";
           };
@@ -306,6 +656,21 @@
             pkgs.xdotool
             pkgs.libsciter
             pkgs.libayatana-appindicator
+            pkgs.libdrm
+            pkgs.libglvnd
+            pkgs.mesa
+            pkgs.mesa-drivers
+            pkgs.libegl
+            pkgs.libgles2
+            pkgs.libwayland-client
+            pkgs.wayland
+            pkgs.libxkbcommon
+            pkgs.libxcomposite
+            pkgs.libxdamage
+            pkgs.libxfixes
+            pkgs.libxrandr
+            pkgs.libxtst
+            pkgs.libxkbfile
           ] ++ lib.optionals pkgs.stdenv.isDarwin [
             pkgs.libiconv
             pkgs.apple-sdk
@@ -313,7 +678,7 @@
             libsciter-darwin
           ];
 
-          RUSTDESK_BUILD_FEATURES = lib.optionalString pkgs.stdenv.isLinux "linux-pkg-config";
+          RUSTDESK_BUILD_FEATURES = lib.optionalString pkgs.stdenv.isLinux "linux-pkg-config drm drm-wake";
 
           shellHook = ''
             # Set up hbb_common so cargo build works from the source tree.
